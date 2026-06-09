@@ -881,8 +881,36 @@ export async function claimNFTRewards(): Promise<string> {
 }
 
 export async function claimNFTRewardsByType(nftType: number): Promise<string> {
-  const c = await getSignerContract(LITDEX_NFT_ADDRESS, LITDEX_NFT_ABI as never);
-  const tx = await c.claimRewardsByType(nftType);
+  // Coerce to a clean integer and validate against allowed tiers (1, 2, 3).
+  // Solidity uint8 + the contract's internal math overflow on type 0 or out-of-range values,
+  // which surfaces as "Panic due to OVERFLOW(17)".
+  const typeNum = Number(nftType);
+  if (!Number.isInteger(typeNum) || ![1, 2, 3].includes(typeNum)) {
+    throw new Error(`Invalid NFT type: ${nftType}. Must be 1, 2, or 3.`);
+  }
+
+  const signer = await getSigner();
+  const userAddr = await signer.getAddress();
+
+  // Pre-flight: ensure pending rewards exist & are finite before sending tx.
+  // Claiming zero pending rewards is what triggers the panic on-chain.
+  const reader = new Contract(LITDEX_NFT_ADDRESS, LITDEX_NFT_ABI as never, readProvider);
+  const pending = await reader.getPendingRewardsByType(userAddr, typeNum);
+  const [zk, usdc, ldex] = [pending?.[0], pending?.[1], pending?.[2]].map((v) => {
+    try { return BigInt(v ?? 0); } catch { return NaN as unknown as bigint; }
+  });
+  const allValid = [zk, usdc, ldex].every((v) => typeof v === "bigint" && Number.isFinite(Number(v)));
+  if (!allValid) {
+    throw new Error("Pending rewards unavailable (invalid value). Try again shortly.");
+  }
+  if ((zk as bigint) === 0n && (usdc as bigint) === 0n && (ldex as bigint) === 0n) {
+    throw new Error("No rewards to claim yet for this NFT tier. Come back later.");
+  }
+
+  console.log("Claiming type:", typeNum);
+
+  const c = new Contract(LITDEX_NFT_ADDRESS, LITDEX_NFT_ABI as never, signer);
+  const tx = await c.claimRewardsByType(typeNum);
   await tx.wait();
   return tx.hash as string;
 }
