@@ -1157,7 +1157,14 @@ const NFTsPage = () => {
     setClaimingType(typeToSet);
     try {
       if (nftType !== undefined) {
-        await claimNFTRewardsByType(nftType);
+        // Normalize: contract expects uint8 1|2|3. Reject string/0/NaN to avoid
+        // on-chain Panic(0x11) OVERFLOW from invalid tier inputs.
+        const typeNum = Number(nftType);
+        if (!Number.isInteger(typeNum) || ![1, 2, 3].includes(typeNum)) {
+          throw new Error(`Invalid NFT type: ${nftType}. Must be 1, 2, or 3.`);
+        }
+        console.log("Claiming type:", typeNum);
+        await claimNFTRewardsByType(typeNum);
       } else {
         await claimNFTRewards();
       }
@@ -1172,7 +1179,9 @@ const NFTsPage = () => {
       });
       
       addNotif(address, { type: "nft", title: "Rewards claimed", message: "Daily rewards sent to your wallet" });
-      setTimeout(fetchAll, 1000);
+      // Refresh NFT data immediately, plus a delayed pass for indexer lag.
+      await fetchAll();
+      setTimeout(fetchAll, 1500);
     } catch (err: any) {
       console.error("Claim error:", err);
       addNotif(address, { type: "nft", title: "Claim failed", message: err?.message?.slice(0, 80) || "Transaction reverted" });
